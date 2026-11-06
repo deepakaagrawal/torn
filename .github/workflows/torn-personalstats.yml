@@ -1,0 +1,45 @@
+name: Torn personalstats snapshot
+on:
+  schedule:
+    - cron: '30 3 * * *' # 09:00 Asia/Kolkata (UTC+05:30)
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch personalstats securely
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, urllib.parse, urllib.request, datetime
+          key = os.environ.get("TORN_API_KEY")
+          if not key:
+              raise SystemExit("Missing TORN_API_KEY Actions secret")
+          # API key is sent in an HTTPS request and is never printed.
+          params = urllib.parse.urlencode({"selections": "personalstats", "key": key})
+          req = urllib.request.Request("https://api.torn.com/user/?" + params,
+                                       headers={"User-Agent": "torn-personalstats-tracker/1.0"})
+          with urllib.request.urlopen(req, timeout=30) as response:
+              data = json.load(response)
+          if "error" in data:
+              raise SystemExit("Torn API returned an error; verify key permissions and limits")
+          if not isinstance(data.get("personalstats"), dict):
+              raise SystemExit("Unexpected Torn API response: missing personalstats")
+          stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+          pathlib.Path("snapshot").mkdir(exist_ok=True)
+          pathlib.Path("snapshot/personalstats.json").write_text(
+              json.dumps({"collected_at_utc": stamp, "personalstats": data["personalstats"]},
+                         indent=2) + "\n", encoding="utf-8")
+          print("Personalstats snapshot collected successfully")
+          PY
+      - name: Upload private workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: torn-personalstats
+          path: snapshot/personalstats.json
+          retention-days: 30
+          if-no-files-found: error
